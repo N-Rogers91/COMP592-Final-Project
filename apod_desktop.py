@@ -1,7 +1,7 @@
-""" 
+"""
 COMP 593 - Final Project
 
-Description: 
+Description:
   Downloads NASA's Astronomy Picture of the Day (APOD) from a specified date
   and sets it as the desktop background image.
 
@@ -11,19 +11,23 @@ Usage:
 Parameters:
   apod_date = APOD date (format: YYYY-MM-DD)
 """
-from datetime import date
-import os
-import image_lib
+import hashlib
 import inspect
+import sqlite3
+import sys
+import requests
+import image_lib
+import os
+from datetime import date, datetime
 
 # Global variables
-image_cache_dir =  os.path.join(os.getcwd(), "NASA_cache")
+image_cache_dir = os.path.join(os.getcwd(), "NASA_cache")
 image_cache_db = os.path.join(image_cache_dir, "APOD_cache.db")
 
 def main():
     ## DO NOT CHANGE THIS FUNCTION ##
     # Get the APOD date from the command line
-    apod_date = get_apod_date()    
+    apod_date = get_apod_date()
 
     # Get the path of the directory in which this script resides
     script_dir = get_script_dir()
@@ -43,7 +47,7 @@ def main():
 
 def get_apod_date():
     """Gets the APOD date
-     
+
     The APOD date is taken from the first command line parameter.
     Validates that the command line parameter specifies a valid APOD date.
     Prints an error message and exits script if the date is invalid.
@@ -52,19 +56,41 @@ def get_apod_date():
     Returns:
         date: APOD date
     """
-    # TODO: Complete function body
-    try:
-        apod_date = date.fromisoformat()
-    except IndexError:
-        print("please enter a proper date")
-        exit()
-        
-        
-    except ValueError:
+    apod_date = None
+
+    # REQ-1
+    # check if command line argument is provided
+    if len(sys.argv) > 1:
+        # get the command line argument
+        apod_date_str = sys.argv[1]
+
+        try:
+            # convert command line argument to date object
+            apod_date = datetime.strptime(apod_date_str, "%Y-%m-%d").date()
+        except ValueError:
+            #REQ-3
+            # if invalid date format print error message and exit
+            print("Invalid date format. Date must be in the format: YYYY-MM-DD")
+            exit()
+    else:
+        # REQ-4
+        # if no command line argument use todays date
         apod_date = date.today()
 
-        print("please enter proper format: Y-M-D") 
-        
+    # check if APOD date is before first APOD date (1995-06-16)
+    first_apod_date = date(1995, 6, 16)
+
+    # REQ-4
+    if apod_date < first_apod_date:
+        print("APOD date cannot be before June 16, 1995")
+        exit()
+
+    # REQ-4
+    # check if APOD date is in the future
+    today = date.today()
+    if apod_date > today:
+        print("APOD date cannot be in the future")
+        exit()
 
     return apod_date
 
@@ -83,25 +109,51 @@ def init_apod_cache(parent_dir):
     - Determining the paths of the image cache directory and database,
     - Creating the image cache directory if it does not already exist,
     - Creating the image cache database if it does not already exist.
-    
+
     The image cache directory is a subdirectory of the specified parent directory.
     The image cache database is a sqlite database located in the image cache directory.
 
     Args:
-        parent_dir (str): Full path of parent directory    
+        parent_dir (str): Full path of parent directory
+
+    Returns:
+        str: Full path of the image cache database file
     """
     global image_cache_dir
     global image_cache_db
-    # TODO: Determine the path of the image cache directory
-    # TODO: Create the image cache directory if it does not already exist
-    # TODO: Determine the path of image cache DB
-    # TODO: Create the DB if it does not already exist
+
+    # determines the path of the image cache directory
+    image_cache_dir = os.path.join(parent_dir, 'image_cache')
+
+    # creates the image cache directory if it does not already exist
+    if not os.path.exists(image_cache_dir):
+        os.makedirs(image_cache_dir)
+
+    # determines the path of image cache DB
+    image_cache_db = os.path.join(image_cache_dir, 'apod_cache.db')
+
+    # creates the DB if it does not already exist
+    conn = sqlite3.connect(image_cache_db)
+    conn.execute('''CREATE TABLE IF NOT EXISTS apod_cache (
+                    id INTEGER PRIMARY KEY,
+                    date TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    explanation TEXT NOT NULL,
+                    url TEXT NOT NULL,
+                    media_type TEXT NOT NULL,
+                    file_path TEXT NOT NULL,
+                    hash TEXT NOT NULL)''')
+    conn.commit()
+    conn.close()
+
+    return image_cache_db
+
 
 def add_apod_to_cache(apod_date):
     """Adds the APOD image from a specified date to the image cache.
-     
+
     The APOD information and image file is downloaded from the NASA API.
-    If the APOD is not already in the DB, the image file is saved to the 
+    If the APOD is not already in the DB, the image file is saved to the
     image cache and the APOD information is added to the image cache DB.
 
     Args:
@@ -111,17 +163,54 @@ def add_apod_to_cache(apod_date):
         int: Record ID of the APOD in the image cache DB, if a new APOD is added to the
         cache successfully or if the APOD already exists in the cache. Zero, if unsuccessful.
     """
+
+    # variable apod_date is formatted using isoformat function
     print("APOD date:", apod_date.isoformat())
-    # TODO: Download the APOD information from the NASA API
-    # TODO: Download the APOD image
-    # TODO: Check whether the APOD already exists in the image cache
-    # TODO: Save the APOD file to the image cache directory
-    # TODO: Add the APOD information to the DB
-    return 0
+
+    # download the APOD information from the NASA API
+    api_url = f"https://api.nasa.gov/planetary/apod?api_key=6k6BWl9meM6Nq1GOg3Akhk8cEqMgDfQPleAZ7dDS&date={apod_date}"
+    response = requests.get(api_url)
+    if response.status_code != 200:
+        print(f"Error downloading APOD information for {apod_date.isoformat()}: status code {response.status_code}")
+        return 0
+
+    # parse the APOD information
+    apod = response.json()
+    print("APOD title:", apod["title"])
+
+    # download the APOD image
+    image_url = apod["url"]
+    response = requests.get(image_url)
+    if response.status_code != 200:
+        print(f"Error downloading APOD image for {apod_date.isoformat()}: status code {response.status_code}")
+        return 0
+
+    # checks whether the APOD already exists in the image cache
+    image_hash = hashlib.sha256(response.content).hexdigest()
+
+    # saves the APOD file to the image cache directory
+    image_cache_path = os.path.join(image_cache_dir, image_hash[:2], image_hash[2:4], image_hash)
+    os.makedirs(os.path.dirname(image_cache_path), exist_ok=True)
+    with open(image_cache_path, "wb") as f:
+        f.write(response.content)
+    print(f"APOD for {apod_date.isoformat()} saved to {image_cache_path}")
+
+    # adds the APOD information to the DB
+    conn = sqlite3.connect(image_cache_db)
+    c = conn.cursor()
+    c.execute("INSERT INTO apod_cache (date, title, explanation, url, media_type, file_path, hash) VALUES (?, ?, ?, ?, ?, ?, ?)",
+              (apod_date.isoformat(), apod["title"], apod["explanation"], apod["url"], apod["media_type"], image_cache_path, image_hash))
+    conn.commit()
+    record_id = c.lastrowid
+    conn.close()
+
+    print(f"APOD information added to cache (ID={record_id})")
+    return record_id
+
 
 def add_apod_to_db(title, explanation, file_path, sha256):
     """Adds specified APOD information to the image cache DB.
-     
+
     Args:
         title (str): Title of the APOD image
         explanation (str): Explanation of the APOD image
@@ -129,14 +218,14 @@ def add_apod_to_db(title, explanation, file_path, sha256):
         sha256 (str): SHA-256 hash value of APOD image
 
     Returns:
-        int: The ID of the newly inserted APOD record, if successful.  Zero, if unsuccessful       
+        int: The ID of the newly inserted APOD record, if successful.  Zero, if unsuccessful
     """
     # TODO: Complete function body
     return 0
 
 def get_apod_id_from_db(image_sha256):
     """Gets the record ID of the APOD in the cache having a specified SHA-256 hash value
-    
+
     This function can be used to determine whether a specific image exists in the cache.
 
     Args:
@@ -149,9 +238,9 @@ def get_apod_id_from_db(image_sha256):
     return 0
 
 def determine_apod_file_path(image_title, image_url):
-    """Determines the path at which a newly downloaded APOD image must be 
-    saved in the image cache. 
-    
+    """Determines the path at which a newly downloaded APOD image must be
+    saved in the image cache.
+
     The image file name is constructed as follows:
     - The file extension is taken from the image URL
     - The file name is taken from the image title, where:
@@ -169,7 +258,7 @@ def determine_apod_file_path(image_title, image_url):
     Args:
         image_title (str): APOD title
         image_url (str): APOD image URL
-    
+
     Returns:
         str: Full path at which the APOD image file must be saved in the image cache directory
     """
@@ -189,7 +278,7 @@ def get_apod_info(image_id):
     # TODO: Query DB for image info
     # TODO: Put information into a dictionary
     apod_info = {
-        #'title': , 
+        #'title': ,
         #'explanation': ,
         'file_path': 'TBD',
     }
